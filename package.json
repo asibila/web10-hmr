@@ -1,0 +1,20 @@
+{
+  "name": "web10",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Web10 monorepo: classification API, React dashboard and the shared catalogue contract.",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "scripts": {
+    "prepare": "npm run build -w @web10/shared",
+    "dev": "npm run build -w @web10/shared && npm run start:dev -w @web10/api",
+    "build": "npm run build -w @web10/shared && npm run build -w @web10/api && npm run build -w @web10/web",
+    "start": "npm run start -w @web10/api",
+    "typecheck": "npm run build -w @web10/shared && npm run typecheck --workspaces --if-present"
+  }
+}

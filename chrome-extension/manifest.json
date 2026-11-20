@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Web10 Asset Detector",
+  "version": "0.2.0",
+  "description": "Classifies the current page into the Web10 asset catalog.",
+  "permissions": ["activeTab", "scripting"],
+  "host_permissions": ["http://127.0.0.1:3000/*"],
+  "action": {
+    "default_title": "Classify this page with Web10",
+    "default_popup": "popup.html"
+  }
+}

@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      :root {
+        color-scheme: light dark;
+      }
+
+      body {
+        width: 420px;
+        min-height: 180px;
+        margin: 0;
+        padding: 16px;
+        font: 14px/1.45 system-ui, sans-serif;
+      }
+
+      h1 {
+        margin: 0 0 4px;
+        font-size: 17px;
+      }
+
+      .muted {
+        margin: 0 0 14px;
+        opacity: 0.65;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      button {
+        padding: 8px 12px;
+        border: 1px solid #8888;
+        border-radius: 8px;
+        background: transparent;
+        color: inherit;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        background: #8881;
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.45;
+      }
+
+      #status {
+        min-height: 20px;
+        margin: 12px 0 8px;
+        opacity: 0.75;
+      }
+
+      #error {
+        margin: 8px 0;
+        color: #c62828;
+        white-space: pre-wrap;
+      }
+
+      pre {
+        max-height: 420px;
+        margin: 8px 0 0;
+        padding: 12px;
+        overflow: auto;
+        border-radius: 8px;
+        background: #111;
+        color: #f2f2f2;
+        font: 12px/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Web10 Asset Detector</h1>
+    <p class="muted">Send this page to the local Web10 API for classification.</p>
+
+    <div class="actions">
+      <button id="classify" type="button">Classify page</button>
+      <button id="copy" type="button" disabled>Copy JSON</button>
+    </div>
+
+    <p id="status" role="status"></p>
+    <p id="error" role="alert" hidden></p>
+    <pre id="json" hidden></pre>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
