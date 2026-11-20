@@ -56,9 +56,12 @@ One server, one port, in both modes. The API is the host; React is mounted into 
 `src/main.ts` registers a middleware that hands `/api/**` to the Nest router and
 everything else to the React renderer. In development Vite serves the assets and
 compiles the modules; in production `express.static` serves `apps/web/dist`.
-Either way, HTML comes from `apps/web/src/entry-server.tsx`, rendered per
-request. Because both halves live on one origin there is no proxy and no CORS
-handling between them.
+When an SSR bundle is present, HTML comes from `apps/web/src/entry-server.tsx`,
+rendered per request. Because both halves live on one origin there is no proxy
+and no CORS handling between them.
+
+In production the build folder decides what runs — see
+[Serving modes](#serving-modes) for all four outcomes and their log lines.
 
 The `/api` prefix is the only boundary. Any new backend route is reachable from
 the UI with a plain relative `fetch('/api/...')`.
@@ -79,8 +82,8 @@ you a UI with no API. Use `npm run dev`.
 
 ### Server-side rendering
 
-Every HTML response is rendered on the server; the browser hydrates it. Three
-files carry this:
+When an SSR bundle is present, every HTML response is rendered on the server and
+the browser hydrates it. Three files carry this:
 
 | File | Role |
 |---|---|
@@ -99,12 +102,78 @@ boundary honest: the server calls the same endpoint the browser would. Extend
 give `render` a `url` parameter for route-dependent pages — the middleware
 already passes the request path.
 
-Two escape hatches, both verified:
+#### Serving modes
 
-- No SSR bundle present → the API logs it and serves the client-only build, so
-  `npm start` never fails to boot because a build step was skipped.
-- Vite runs with `appType: 'custom'`, so it never answers navigation requests;
-  the SSR middleware does, and missing assets still return a real 404.
+The API picks one mode at boot and never re-checks the disk afterwards. In
+`apps/api/src/main.ts`, `bootstrap()` calls `inspectWebBuild` (`ssr.ts`) once and
+switches on the result: a three-way `switch` for production, plus the `--dev`
+branch chosen from `process.argv`.
+
+| Mode | Chosen when | HTML | Log line |
+|---|---|---|---|
+| `dev` | `npm run dev` (passes `--dev`) | `entry-server.tsx` compiled per request, HMR live | `Vite + SSR attached; HMR shares port 3000` |
+| `ssr` | `dist/index.html` **and** `dist/server/entry-server.js` exist | rendered per request from the prebuilt bundle | `Server-rendering with ...\entry-server.js` |
+| `client` | `dist/index.html` exists, no SSR bundle | static shell; React renders in the browser | `Serving the web build from ... (client-only)` |
+| `api-only` | no `dist/index.html` | none — every non-`/api` URL returns 404 | `No web build at ...; running API only.` |
+
+`client` and `api-only` are deliberate fallbacks, not failures. They exist so
+`npm start` boots even when a build step was skipped, and because client-only
+deployment is a legitimate topology: `readAppData()` returns `EMPTY_APP_DATA`
+when the HTML carries no `window.__WEB10_DATA__`, and the app fetches on mount.
+What you lose is the server-rendered first paint — the page arrives as an empty
+shell and fills in after hydration.
+
+##### Why the SSR bundle can be missing
+
+1. **`emptyOutDir` wipes it.** `apps/web/vite.config.ts` sets
+   `emptyOutDir: true`, so a plain `vite build` — including
+   `npx vite build` inside `apps/web` — empties the *whole* `dist/`, deleting
+   the `dist/server/` folder the SSR step wrote. You end up in `client` mode
+   with no warning beyond the log line. **Never run bare `vite build`;** use
+   `npm run build` (root) or `npm run build -w @web10/web`.
+2. **The build stopped after the client bundle.** `build` is
+   `tsc && vite build && vite build --ssr ...`, so a failure or Ctrl-C during
+   the third step leaves `dist/` with a client bundle only.
+3. **Stale artifacts.** `dist/` is gitignored and never shared, so a `dist/`
+   from before this feature existed has no `server/` folder.
+4. **Partial deployment.** A Docker copy or CDN sync that ships `dist/` but
+   excludes `dist/server/`.
+5. **Path mismatch.** The check is fixed to
+   `<webDist>/server/entry-server.js`; a different `--ssr` entry name or
+   `--outDir` lands elsewhere.
+
+##### Production build and run
+
+```sh
+npm install          # once — also builds @web10/shared via prepare
+npm run build        # shared -> api -> web client bundle -> web SSR bundle
+npm start            # node apps/api/dist/main.js, no --dev
+```
+
+Confirm both web artifacts exist before starting:
+
+```sh
+ls apps/web/dist/index.html
+ls apps/web/dist/server/entry-server.js
+```
+
+Then open `http://127.0.0.1:3000` and view source: a served page contains
+`window.__WEB10_DATA__`. That script is only injected by the SSR middleware, so
+its presence proves you are in `ssr` mode. `curl -s localhost:3000 | grep -c
+__WEB10_DATA__` gives `1` for SSR, `0` otherwise.
+
+##### Troubleshooting
+
+| Symptom | Mode | Fix |
+|---|---|---|
+| Page renders empty, then fills in | `client` | `npm run build` |
+| `Cannot GET /` on every URL | `api-only` | `npm run build`; check `WEB_DIST_DIR` |
+| SSR worked yesterday, not now | `client` | something ran a bare `vite build`; rebuild |
+| Boot fails resolving `react` | — | `WEB_DIST_DIR` points outside the repo, so the SSR bundle finds no `node_modules` |
+
+One supporting detail: Vite runs with `appType: 'custom'`, so it never answers
+navigation requests; the SSR middleware does, and missing assets still return a
+real 404.
 
 Not implemented, and worth knowing before you need them: streaming
 (`renderToPipeableStream`), per-request caching, and `renderToStaticMarkup` for
@@ -131,7 +200,7 @@ Run everything from the repository root.
 ```sh
 npm install          # installs all workspaces and builds @web10/shared
 npm run dev          # one server on :3000 — Nest API + React with HMR
-npm run build        # shared, API, client bundle and SSR bundle
+npm run build        # shared -> API -> client bundle -> SSR bundle, in that order
 npm start            # same server, serving the prebuilt React app
 npm run typecheck    # typecheck every workspace
 ```
@@ -139,20 +208,38 @@ npm run typecheck    # typecheck every workspace
 `npm run dev` is a single process. The API and the dashboard are both served
 from `http://127.0.0.1:3000`; there is no second dev port.
 
+`npm start` runs `node apps/api/dist/main.js` and **does not build anything**.
+Run `npm run build` first, or the server boots into `client`/`api-only` mode —
+see [Serving modes](#serving-modes). The order inside `npm run build` matters
+because the web bundle is produced in two steps and the first one empties the
+output folder.
+
 Individual packages:
 
 ```sh
 npm run start:dev -w @web10/api   # same as npm run dev, one level down
 npm run build     -w @web10/shared
-npm run build     -w @web10/web
+npm run build     -w @web10/web   # client + SSR bundle; never bare `vite build`
 ```
+
+Do not run `vite build` directly in `apps/web`: it is only the client half of
+the build, and its `emptyOutDir` deletes the SSR bundle next to it.
 
 ## Configuration
 
 The API reads `.env` from `apps/api/.env`. Copy `apps/api/.env.example` and set
 at least `OPENCODE_PASSWORD`. See `apps/api/README.md` for the full table.
 
-The web app needs no configuration: it always calls `/api` on its own origin.## Node version
+The web app needs no configuration: it always calls `/api` on its own origin.
+
+Optional API settings that affect the modes above:
+
+| Variable | Effect |
+|---|---|
+| `PORT` | Port for API, assets and HMR together (default `3000`) |
+| `WEB_DIST_DIR` | Overrides `apps/web/dist` for **both** SSR and client-only serving. Keep it inside the repository: the SSR bundle resolves `react` from the nearest `node_modules` |
+
+## Node version
 
 Node 20.19+ (or 22.12+). The `engines` field in the root `package.json` records
 this; Vite 8 and React 19 both require it.

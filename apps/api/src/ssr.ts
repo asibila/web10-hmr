@@ -146,31 +146,48 @@ export function createDevSsr(options: {
 }
 
 /**
- * Production: loads the `vite build --ssr` bundle once and renders per request.
- * Returns `null` when no SSR bundle exists, so the caller can fall back to
- * client-only rendering instead of failing to boot.
+ * What the `vite build` step actually left in the web dist folder. Read once at
+ * boot so the serving strategy is decided in a single place.
  */
-export async function createProdSsr(options: {
-  webDir: string;
-  origin: string;
-}): Promise<Connect.NextHandleFunction | null> {
-  const distDir = join(options.webDir, 'dist');
-  const entryPath = join(distDir, 'server', 'entry-server.js');
-  const templatePath = join(distDir, 'index.html');
+export type WebBuild =
+  | { kind: 'ssr'; templatePath: string; entryPath: string }
+  | { kind: 'client'; templatePath: string }
+  | { kind: 'none' };
 
-  if (!existsSync(entryPath) || !existsSync(templatePath)) {
-    logger.log(
-      `No SSR bundle at ${entryPath}; falling back to client-only rendering.`,
-    );
-    return null;
+/**
+ * A missing SSR bundle is a normal state, not an error: `apps/web` builds the
+ * client and the server bundle in two separate steps, and `emptyOutDir` means a
+ * client-only build deletes `dist/server`. Report what is there and let the
+ * caller choose a mode.
+ */
+export function inspectWebBuild(webDist: string): WebBuild {
+  const templatePath = join(webDist, 'index.html');
+  const entryPath = join(webDist, 'server', 'entry-server.js');
+
+  if (!existsSync(templatePath)) {
+    return { kind: 'none' };
   }
 
+  return existsSync(entryPath)
+    ? { kind: 'ssr', templatePath, entryPath }
+    : { kind: 'client', templatePath };
+}
+
+/**
+ * Production: loads the `vite build --ssr` bundle once and renders per request.
+ * Paths come from `inspectWebBuild`, so this only runs when the bundle exists.
+ */
+export async function createProdSsr(options: {
+  entryPath: string;
+  templatePath: string;
+  origin: string;
+}): Promise<Connect.NextHandleFunction> {
   const [template, module] = await Promise.all([
-    readFile(templatePath, 'utf-8'),
-    importModule(pathToFileURL(entryPath).href),
+    readFile(options.templatePath, 'utf-8'),
+    importModule(pathToFileURL(options.entryPath).href),
   ]);
 
-  logger.log(`Server-rendering with ${entryPath}`);
+  logger.log(`Server-rendering with ${options.entryPath}`);
 
   return async (req, res, next) => {
     const path = requestPath(req);

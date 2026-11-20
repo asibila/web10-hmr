@@ -1,5 +1,4 @@
 import 'reflect-metadata';
-import { existsSync } from 'node:fs';
 import type { ServerResponse } from 'node:http';
 import { join, resolve } from 'node:path';
 import { Logger, ValidationPipe } from '@nestjs/common';
@@ -8,7 +7,12 @@ import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import type { Connect } from 'vite';
 import { AppModule } from './app.module';
-import { createDevSsr, createProdSsr, isApiPath } from './ssr';
+import {
+  createDevSsr,
+  createProdSsr,
+  inspectWebBuild,
+  isApiPath,
+} from './ssr';
 
 const logger = new Logger('Bootstrap');
 
@@ -18,6 +22,17 @@ const logger = new Logger('Bootstrap');
  * server, and HMR. Without the flag the `vite build` output is served instead.
  */
 const DEV_SERVER = process.argv.includes('--dev');
+
+/**
+ * Where the `vite build` output lives. `WEB_DIST_DIR` overrides it for every
+ * production mode, so an alternate build directory can be served without code
+ * changes.
+ */
+function resolveWebDist(config: ConfigService, webDir: string): string {
+  const configured = config.get<string>('WEB_DIST_DIR');
+
+  return configured ? resolve(configured) : join(webDir, 'dist');
+}
 
 /** Development: Vite owns assets and module requests, this app owns the HTML. */
 async function attachDevServer(
@@ -67,21 +82,15 @@ async function attachDevServer(
   logger.log(`Vite + SSR attached; HMR shares port ${port}`);
 }
 
-/** Fallback when there is a client build but no SSR bundle. */
+/**
+ * Fallback when there is a client build but no SSR bundle. The markup is
+ * rendered by the browser; `readAppData` returns an empty payload, so the app
+ * fetches on mount exactly as it did before SSR existed.
+ */
 function attachClientOnly(
   app: NestExpressApplication,
-  config: ConfigService,
+  webDist: string,
 ): void {
-  const configured = config.get<string>('WEB_DIST_DIR');
-  const webDist = configured
-    ? resolve(configured)
-    : join(__dirname, '..', '..', 'web', 'dist');
-
-  if (!existsSync(join(webDist, 'index.html'))) {
-    logger.log(`No web build at ${webDist}; running API only.`);
-    return;
-  }
-
   app.useStaticAssets(webDist);
 
   // Structurally typed so this package needs no direct express dependency.
@@ -133,18 +142,34 @@ async function bootstrap() {
   const port = Number(config.get<string>('PORT', '3000'));
   const origin = `http://127.0.0.1:${port}`;
   const webDir = join(__dirname, '..', '..', 'web');
+  const webDist = resolveWebDist(config, webDir);
 
   if (DEV_SERVER) {
     await attachDevServer(app, webDir, origin, port);
   } else {
-    const ssr = await createProdSsr({ webDir, origin });
+    // Three production outcomes, decided once from what the build left on disk.
+    const build = inspectWebBuild(webDist);
 
-    if (ssr) {
-      // `index: false` so `/` reaches the SSR middleware instead of the file.
-      app.useStaticAssets(join(webDir, 'dist'), { index: false });
-      app.use(ssr);
-    } else {
-      attachClientOnly(app, config);
+    switch (build.kind) {
+      case 'ssr':
+        // `index: false` so `/` reaches the SSR middleware instead of the file.
+        app.useStaticAssets(webDist, { index: false });
+        app.use(
+          await createProdSsr({
+            templatePath: build.templatePath,
+            entryPath: build.entryPath,
+            origin,
+          }),
+        );
+        break;
+
+      case 'client':
+        attachClientOnly(app, webDist);
+        break;
+
+      case 'none':
+        logger.log(`No web build at ${webDist}; running API only.`);
+        break;
     }
   }
 
