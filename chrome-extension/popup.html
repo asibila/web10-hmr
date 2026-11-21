@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Web10 Job Capture</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0a0e14;
+        --surface: #111821;
+        --surface-2: #18212c;
+        --border: #263241;
+        --text: #e8eef6;
+        --muted: #8ea0b5;
+        --faint: #65788e;
+        --accent: #5aa9ff;
+        --good: #3ecf8e;
+        --bad: #f87171;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 420px;
+        min-height: 190px;
+        margin: 0;
+        padding: 16px;
+        background: radial-gradient(circle at 10% -10%, #17304d, transparent 55%),
+          var(--bg);
+        color: var(--text);
+        font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      .mark {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 10px;
+        background: linear-gradient(150deg, #5aa9ff, #7c5cff 70%, #c084fc);
+        color: #06121f;
+        font-weight: 800;
+        letter-spacing: -0.05em;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        letter-spacing: -0.01em;
+      }
+
+      .muted {
+        margin: 1px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .actions {
+        display: flex;
+        gap: 8px;
+      }
+
+      button {
+        padding: 8px 12px;
+        border: 1px solid transparent;
+        border-radius: 9px;
+        background: var(--accent);
+        color: #06121f;
+        font: inherit;
+        font-weight: 650;
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        filter: brightness(1.08);
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.5;
+      }
+
+      button.ghost {
+        background: transparent;
+        border-color: var(--border);
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      #status {
+        min-height: 20px;
+        margin: 12px 0 4px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      #error {
+        margin: 8px 0;
+        padding: 8px 10px;
+        border: 1px solid #f8717166;
+        border-radius: 8px;
+        background: #f8717118;
+        color: #ffb4ae;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+
+      #result {
+        margin-top: 10px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        background: var(--surface);
+      }
+
+      #job-title {
+        margin: 0;
+        font-size: 14px;
+        line-height: 1.3;
+      }
+
+      #job-company {
+        margin: 2px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      #job-salary {
+        margin: 8px 0 0;
+        color: var(--accent);
+        font-size: 12px;
+        font-weight: 650;
+      }
+
+      .badges {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 8px;
+      }
+
+      .badge {
+        padding: 1px 7px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        background: var(--surface-2);
+        color: var(--muted);
+        font-size: 11px;
+      }
+
+      .badge--remote {
+        color: var(--good);
+        border-color: #3ecf8e55;
+      }
+
+      .badge--hybrid {
+        color: #a78bfa;
+        border-color: #a78bfa55;
+      }
+
+      .badge--onsite {
+        color: var(--accent);
+        border-color: #5aa9ff55;
+      }
+
+      .badge--note {
+        color: var(--accent);
+      }
+
+      details {
+        margin-top: 10px;
+      }
+
+      summary {
+        color: var(--faint);
+        font-size: 11px;
+        cursor: pointer;
+      }
+
+      pre {
+        max-height: 260px;
+        margin: 6px 0 0;
+        padding: 10px;
+        overflow: auto;
+        border-radius: 8px;
+        background: #070a0e;
+        color: #cdd9e5;
+        font: 11px/1.45 ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      #copy {
+        margin-top: 8px;
+        padding: 5px 9px;
+        font-size: 11px;
+      }
+
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <span class="mark" aria-hidden="true">10</span>
+      <div>
+        <h1>Web10 Jobs</h1>
+        <p class="muted">Save the job ad you are reading to your local index.</p>
+      </div>
+    </header>
+
+    <div class="actions">
+      <button id="save" type="button">Save job</button>
+      <button id="open" type="button" class="ghost" hidden>Open job page</button>
+    </div>
+
+    <p id="status" role="status"></p>
+    <p id="error" role="alert" hidden></p>
+
+    <section id="result" hidden>
+      <h2 id="job-title"></h2>
+      <p id="job-company"></p>
+      <p id="job-salary"></p>
+      <div id="job-badges" class="badges"></div>
+      <details>
+        <summary>Raw JSON</summary>
+        <pre id="json"></pre>
+      </details>
+      <button id="copy" type="button" class="ghost">Copy JSON</button>
+    </section>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
