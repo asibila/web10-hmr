@@ -236,8 +236,47 @@ Optional API settings that affect the modes above:
 
 | Variable | Effect |
 |---|---|
-| `PORT` | Port for API, assets and HMR together (default `3000`) |
+| `HOST` | Interface to bind (default `127.0.0.1`). Set `0.0.0.0` on any platform that proxies traffic to the container |
+| `PORT` | Port for API, assets and HMR together (default `3000`); platforms inject this |
 | `WEB_DIST_DIR` | Overrides `apps/web/dist` for **both** SSR and client-only serving. Keep it inside the repository: the SSR bundle resolves `react` from the nearest `node_modules` |
+
+## Deploying
+
+Any host that runs Node works the same way: build once, then run the compiled
+entry point. Nothing is built at startup.
+
+**Render — Node web service**
+
+| Setting | Value |
+|---|---|
+| Build command | `npm run build` |
+| Start command | `npm run start` |
+| Health check path | `/api/health` |
+
+`npm install` in the build command is redundant: Render installs dependencies
+before running it. Keep it only if you prefer the command to be self-contained.
+
+Required environment variables:
+
+| Variable | Why |
+|---|---|
+| `HOST=0.0.0.0` | Without it the server binds loopback and Render reports no open ports |
+| `OPENCODE_BASE_URL` | Reachable OpenCode server. The default `http://127.0.0.1:4096` only exists on your machine, so classification returns 502 and `/api/health` reports `opencode.ok: false` |
+| `OPENCODE_PASSWORD` | Credential for that server |
+
+Do **not** set `PORT`: the platform assigns it and `main.ts` reads it.
+
+Two things that bite on a fresh host:
+
+- The build needs devDependencies (`typescript`, `vite`). If the build fails with
+  `tsc: not found`, `NODE_ENV=production` made npm skip them — use
+  `npm install --include=dev && npm run build` instead.
+- Vite 8 requires Node 20.19+ or 22.12+. If the host defaults to an older 22.x,
+  pin it via the platform's Node version setting (or a `.node-version` file).
+
+CORS already allows `chrome-extension://` origins, so the extension can call the
+deployed API directly. Same-origin requests from the served page need no CORS at
+all.
 
 ## Node version
 

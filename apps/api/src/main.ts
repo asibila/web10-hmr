@@ -34,6 +34,16 @@ function resolveWebDist(config: ConfigService, webDir: string): string {
   return configured ? resolve(configured) : join(webDir, 'dist');
 }
 
+/**
+ * The address the server calls back on for SSR data. A wildcard bind is not
+ * dialable, so it becomes loopback; any other host is used as given.
+ */
+function selfOrigin(host: string, port: number): string {
+  const dialable = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host;
+
+  return `http://${dialable}:${port}`;
+}
+
 /** Development: Vite owns assets and module requests, this app owns the HTML. */
 async function attachDevServer(
   app: NestExpressApplication,
@@ -140,7 +150,8 @@ async function bootstrap() {
 
   const config = app.get(ConfigService);
   const port = Number(config.get<string>('PORT', '3000'));
-  const origin = `http://127.0.0.1:${port}`;
+  const host = config.get<string>('HOST', '127.0.0.1');
+  const origin = selfOrigin(host, port);
   const webDir = join(__dirname, '..', '..', 'web');
   const webDist = resolveWebDist(config, webDir);
 
@@ -173,9 +184,9 @@ async function bootstrap() {
     }
   }
 
-  await app.listen(port, '127.0.0.1');
+  await app.listen(port, host);
 
-  console.log(`Web10 listening on http://127.0.0.1:${port}`);
+  console.log(`Web10 listening on http://${host}:${port}`);
 }
 
 void bootstrap();
