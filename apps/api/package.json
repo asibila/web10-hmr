@@ -2,7 +2,7 @@
   "name": "@web10/api",
   "version": "0.1.0",
   "private": true,
-  "description": "Web10 asset-classification API backed by a local OpenCode instance.",
+  "description": "Web10 jobs API: extract job postings with OpenCode, index them in PostgreSQL, and serve faceted search.",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/main.js",
@@ -18,11 +18,13 @@
     "axios": "^1.21.1",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
+    "pg": "^8.23.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.2"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
+    "@types/pg": "^8.23.1",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "vite": "^8.3.8"

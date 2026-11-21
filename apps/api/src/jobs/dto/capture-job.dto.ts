@@ -1,4 +1,4 @@
-import type { ClassifyPageInput } from '@web10/shared';
+import type { CaptureJobInput } from '@web10/shared';
 import {
   IsArray,
   IsObject,
@@ -9,10 +9,10 @@ import {
 } from 'class-validator';
 
 /**
- * Runtime validation for `ClassifyPageInput`. The `implements` clause keeps this
+ * Runtime validation for `CaptureJobInput`. The `implements` clause keeps this
  * class and the shared contract from drifting apart.
  */
-export class ClassifyPageDto implements ClassifyPageInput {
+export class CaptureJobDto implements CaptureJobInput {
   @IsString()
   @MinLength(1)
   @MaxLength(4096)

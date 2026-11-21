@@ -1,22 +1,25 @@
-import type { HealthStatus } from '@web10/shared';
+import {
+  EMPTY_APP_DATA,
+  parseAppRoute,
+  type AppData,
+} from '@web10/shared';
 
 /**
  * Data the server resolves before rendering, so the first paint already has it.
- * Extend this interface as pages start needing real per-route data.
+ * The shape lives in `@web10/shared` so the API's SSR middleware and this app
+ * cannot drift apart.
  */
-export interface AppData {
-  health: HealthStatus | null;
-  healthError: string | null;
-}
+export type { AppData };
 
 export const APP_DATA_GLOBAL = '__WEB10_DATA__';
 
-export const EMPTY_APP_DATA: AppData = { health: null, healthError: null };
+export { EMPTY_APP_DATA };
 
 /**
  * Reads the payload the Nest SSR middleware injected into the HTML. Returns the
  * empty payload when the page was served without SSR, in which case the app
- * fetches its data on the client as before.
+ * fetches its data on the client as before. The URL still decides the route, so
+ * a client-only build opens a pasted /asset/:id link correctly.
  */
 export function readAppData(): AppData {
   const injected = (globalThis as unknown as Record<string, unknown>)[
@@ -25,6 +28,10 @@ export function readAppData(): AppData {
 
   if (injected && typeof injected === 'object') {
     return injected as AppData;
+  }
+
+  if (typeof window !== 'undefined') {
+    return { ...EMPTY_APP_DATA, route: parseAppRoute(window.location.pathname) };
   }
 
   return EMPTY_APP_DATA;

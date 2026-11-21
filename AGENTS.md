@@ -1,18 +1,25 @@
-# Web10 
+# Web10
 
-Web10 is a unified, deduplicated catalog of the internet’s supply and demand—classifieds, jobs, stock media, rentals, services, events, and more—searchable through one faceted interface.
+Web10 is a private, deduplicated, faceted search index of job postings captured
+from the open web.
 
 ## Local OpenCode instance
 
 URL: http://127.0.0.1:4096/api/session
 
-## Chrome extension ./chrome-extension
+The desktop background service on `http://127.0.0.1:28894` also works. Its
+password is in `~/.config/opencode/service.json`.
 
-./chrome-extension/
+## Chrome extension ../chrome-extension
 
-## Web10-API
-- API: apps/api
-- UI: apps/web
+Sibling folder at `C:\Moje\Web10\chrome-extension`. Load it unpacked and click
+**Save job** on an individual job ad.
+
+## Web10 Jobs
+- API: apps/api (NestJS + PostgreSQL)
+- UI: apps/web (React + Vite, SSR through the API)
+- Contract: packages/shared (`JobPosting`, search types, enums)
+- Database: `DATABASE_URL` in apps/api/.env. The schema is created at boot.
 
 ## GIT
 

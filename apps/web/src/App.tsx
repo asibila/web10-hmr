@@ -1,46 +1,49 @@
-import { useEffect, useState, type FormEvent } from 'react';
-import type {
-  ClassificationResult,
-  EntityClassification,
-  HealthStatus,
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react';
+import {
+  DEFAULT_PAGE_SIZE,
+  JOB_SORTS,
+  jobAssetPath,
+  parseAppRoute,
+  type AppRoute,
+  type CaptureJobResult,
+  type HealthStatus,
+  type JobPosting,
+  type JobSearchParams,
+  type JobSearchResult,
+  type JobSort,
 } from '@web10/shared';
-import { classifyPage, fetchHealth } from './api';
+import {
+  ApiError,
+  deleteJob,
+  fetchHealth,
+  fetchJob,
+  fetchJobs,
+} from './api';
 import type { AppData } from './app-data';
-
-const ENTITY_FIELDS: ReadonlyArray<{
-  key: keyof EntityClassification;
-  label: string;
-}> = [
-  { key: 'category', label: 'Category' },
-  { key: 'subcategory', label: 'Subcategory' },
-  { key: 'title', label: 'Title' },
-  { key: 'description_short', label: 'Short description' },
-  { key: 'description_full', label: 'Full description' },
-  { key: 'external_id', label: 'External ID' },
-  { key: 'sku', label: 'SKU' },
-  { key: 'object_code', label: 'Object code' },
-  { key: 'listing_type', label: 'Listing type' },
-  { key: 'offer_type', label: 'Offer type' },
-  { key: 'state', label: 'State' },
-  { key: 'created_at', label: 'Created at' },
-  { key: 'expires_at', label: 'Expires at' },
-  { key: 'view_count', label: 'View count' },
-];
-
-const SAMPLE = {
-  url: 'https://example.com/oglasi/useljiva-kuca-kotoriba-51081818',
-  title: 'Useljiva kuća s lijepom okućnicom (prodaja)',
-  content:
-    'Na prodaju useljiva obiteljska kuća u mirnom dijelu Kotoribe. ' +
-    'Kuća: Kotoriba, 120.00 m2, katnica, samostojeća. ' +
-    'Sastoji se od kuhinje, dnevnog boravka, tri sobe, kupaonice i WC-a. ' +
-    'Cijena: 85.000 EUR. Šifra oglasa: 51081818.',
-};
+import { CaptureForm } from './components/CaptureForm';
+import { Filters } from './components/Filters';
+import { JobCard } from './components/JobCard';
+import { JobDetail } from './components/JobDetail';
+import { pluralJobs } from './format';
 
 type HealthState =
   | { kind: 'loading' }
   | { kind: 'ready'; value: HealthStatus }
   | { kind: 'error'; message: string };
+
+const SORT_LABELS: Record<JobSort, string> = {
+  newest: 'Newest first',
+  salary: 'Highest salary',
+  relevance: 'Best match',
+};
+
+const HOME_TITLE = 'Web10 Jobs — search captured job postings';
 
 function describeHealth(state: HealthState): { tone: string; text: string } {
   switch (state.kind) {
@@ -48,27 +51,49 @@ function describeHealth(state: HealthState): { tone: string; text: string } {
       return { tone: 'pending', text: 'Checking API…' };
     case 'error':
       return { tone: 'bad', text: `API unreachable — ${state.message}` };
-    case 'ready':
-      return state.value.opencode.ok
+    case 'ready': {
+      const { opencode, database } = state.value;
+
+      if (!database.ok) {
+        return { tone: 'bad', text: 'API up · database unavailable' };
+      }
+
+      const jobs = pluralJobs(database.jobs ?? 0);
+
+      return opencode.ok
         ? {
             tone: 'good',
-            text: `API up · OpenCode ${state.value.opencode.version ?? 'connected'}`,
+            text: `${jobs} indexed · OpenCode ${opencode.version ?? 'connected'}`,
           }
-        : { tone: 'warn', text: 'API up · OpenCode unreachable' };
+        : { tone: 'warn', text: `${jobs} indexed · OpenCode offline` };
+    }
   }
 }
 
-function display(value: string | number | null): string {
-  return value === null || value === '' ? '—' : String(value);
+function errorText(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause);
+}
+
+function missingJobMessage(cause: unknown): string | null {
+  return cause instanceof ApiError &&
+    (cause.status === 404 || cause.status === 400)
+    ? 'This job is not in the index. It may have been removed.'
+    : null;
+}
+
+/** True for a plain left click that should be handled in-app. */
+function isPlainClick(event: ReactMouseEvent): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
 }
 
 export function App({ initialData }: { initialData: AppData }) {
-  const [url, setUrl] = useState('');
-  const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<ClassificationResult | null>(null);
   const [health, setHealth] = useState<HealthState>(() =>
     initialData.health
       ? { kind: 'ready', value: initialData.health }
@@ -76,9 +101,33 @@ export function App({ initialData }: { initialData: AppData }) {
         ? { kind: 'error', message: initialData.healthError }
         : { kind: 'loading' },
   );
+  const [params, setParams] = useState<JobSearchParams>({
+    sort: 'newest',
+    limit: DEFAULT_PAGE_SIZE,
+  });
+  const [result, setResult] = useState<JobSearchResult | null>(
+    initialData.jobs,
+  );
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(initialData.jobsError);
+  const [route, setRoute] = useState<AppRoute>(initialData.route);
+  const [job, setJob] = useState<JobPosting | null>(initialData.job);
+  const [jobError, setJobError] = useState<string | null>(initialData.jobError);
+  const [jobLoading, setJobLoading] = useState(false);
+  const [version, setVersion] = useState(0);
+  const [q, setQ] = useState('');
+  const [locationInput, setLocationInput] = useState('');
+  const skippedInitial = useRef(false);
+  // Remembers which asset id is already in state, so SSR data and card clicks
+  // do not trigger a redundant fetch.
+  const resolvedJobId = useRef<string | null>(
+    initialData.job?.id ??
+      (initialData.route.kind === 'asset' && initialData.jobError
+        ? initialData.route.id
+        : null),
+  );
 
   useEffect(() => {
-    // The server already resolved this, so refetching would only flash.
     if (initialData.health || initialData.healthError) {
       return;
     }
@@ -93,10 +142,7 @@ export function App({ initialData }: { initialData: AppData }) {
       })
       .catch((cause: unknown) => {
         if (!cancelled) {
-          setHealth({
-            kind: 'error',
-            message: cause instanceof Error ? cause.message : String(cause),
-          });
+          setHealth({ kind: 'error', message: errorText(cause) });
         }
       });
 
@@ -105,130 +151,504 @@ export function App({ initialData }: { initialData: AppData }) {
     };
   }, [initialData.health, initialData.healthError]);
 
-  async function onSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  // Keep the indexed-job count in the header in step with captures and deletes.
+  useEffect(() => {
+    if (version === 0) {
+      return;
+    }
 
-    setBusy(true);
-    setError(null);
-    setResult(null);
+    let cancelled = false;
 
-    try {
-      const classification = await classifyPage({
-        url: url.trim(),
-        title: title.trim() || undefined,
-        content: content.trim(),
-        metadata: { lang: navigator.language },
-        capturedAt: new Date().toISOString(),
+    fetchHealth()
+      .then((value) => {
+        if (!cancelled) {
+          setHealth({ kind: 'ready', value });
+        }
+      })
+      .catch(() => {
+        // A stale count is better than replacing a working pill with an error.
       });
 
-      setResult(classification);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(false);
-    }
-  }
+    return () => {
+      cancelled = true;
+    };
+  }, [version]);
 
-  function loadSample() {
-    setUrl(SAMPLE.url);
-    setTitle(SAMPLE.title);
-    setContent(SAMPLE.content);
+  // Browser back/forward moves between the index and asset pages.
+  useEffect(() => {
+    function onPopState() {
+      setRoute(parseAppRoute(window.location.pathname));
+    }
+
+    window.addEventListener('popstate', onPopState);
+
+    return () => window.removeEventListener('popstate', onPopState);
+  }, []);
+
+  // Debounce the free-text fields so typing does not hammer the index.
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const next = q.trim() || undefined;
+
+      setParams((previous) =>
+        previous.q === next ? previous : { ...previous, q: next, offset: 0 },
+      );
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [q]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const next = locationInput.trim() || undefined;
+
+      setParams((previous) =>
+        previous.location === next
+          ? previous
+          : { ...previous, location: next, offset: 0 },
+      );
+    }, 300);
+
+    return () => window.clearTimeout(timer);
+  }, [locationInput]);
+
+  useEffect(() => {
+    if (route.kind !== 'home') {
+      return;
+    }
+
+    if (!skippedInitial.current) {
+      skippedInitial.current = true;
+
+      // The server already resolved the default first page.
+      if (initialData.jobs && version === 0) {
+        return;
+      }
+    }
+
+    const controller = new AbortController();
+    setLoading(true);
     setError(null);
-    setResult(null);
-  }
+
+    fetchJobs(params, controller.signal)
+      .then((value) => {
+        setResult(value);
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          setError(errorText(cause));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [route.kind, params, version, initialData.jobs]);
+
+  // Asset pages resolve their own posting. SSR already supplied the first one.
+  useEffect(() => {
+    if (route.kind !== 'asset') {
+      return;
+    }
+
+    const id = route.id;
+
+    if (resolvedJobId.current === id) {
+      return;
+    }
+
+    resolvedJobId.current = id;
+
+    const controller = new AbortController();
+    setJobLoading(true);
+    setJob(null);
+    setJobError(null);
+
+    fetchJob(id, controller.signal)
+      .then((loaded) => {
+        if (!controller.signal.aborted) {
+          setJob(loaded);
+        }
+      })
+      .catch((cause: unknown) => {
+        if (!controller.signal.aborted) {
+          const missing = missingJobMessage(cause);
+          setJobError(missing ?? errorText(cause));
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setJobLoading(false);
+        }
+      });
+
+    return () => controller.abort();
+  }, [route]);
+
+  // Link previews get the job title from the server; keep the tab in step.
+  useEffect(() => {
+    document.title =
+      route.kind === 'asset'
+        ? job
+          ? `${job.title} at ${job.company ?? job.source} — Web10 Jobs`
+          : 'Job not found — Web10 Jobs'
+        : HOME_TITLE;
+  }, [route, job]);
+
+  const applyPatch = useCallback((patch: Partial<JobSearchParams>) => {
+    setParams((previous) => ({ ...previous, ...patch, offset: 0 }));
+  }, []);
+
+  const clearFilters = useCallback(() => {
+    setQ('');
+    setLocationInput('');
+    setParams((previous) => ({
+      sort: previous.sort,
+      limit: DEFAULT_PAGE_SIZE,
+    }));
+  }, []);
+
+  const goHome = useCallback(() => {
+    if (route.kind === 'home') {
+      return;
+    }
+
+    const state = window.history.state as { web10?: string } | null;
+
+    if (state?.web10 === 'asset-from-home') {
+      // Reached an asset by clicking the index: go back so the search screen
+      // and its scroll position are restored.
+      window.history.back();
+      return;
+    }
+
+    window.history.replaceState({ web10: 'home' }, '', '/');
+    setRoute({ kind: 'home' });
+  }, [route.kind]);
+
+  const openJob = useCallback(
+    (next: JobPosting) => {
+      window.history.pushState(
+        { web10: route.kind === 'home' ? 'asset-from-home' : 'asset' },
+        '',
+        jobAssetPath(next.id),
+      );
+
+      resolvedJobId.current = next.id;
+      setJob(next);
+      setJobError(null);
+      setJobLoading(false);
+      setRoute({ kind: 'asset', id: next.id });
+    },
+    [route.kind],
+  );
+
+  const handleCaptured = useCallback(
+    (capture: CaptureJobResult) => {
+      setVersion((value) => value + 1);
+      openJob(capture.job);
+    },
+    [openJob],
+  );
+
+  const handleDelete = useCallback(
+    async (jobToDelete: JobPosting) => {
+      if (!window.confirm(`Remove "${jobToDelete.title}" from the index?`)) {
+        return;
+      }
+
+      try {
+        await deleteJob(jobToDelete.id);
+        resolvedJobId.current = null;
+        setJob(null);
+        setJobError(null);
+        setVersion((value) => value + 1);
+        goHome();
+      } catch (cause) {
+        setError(errorText(cause));
+      }
+    },
+    [goHome],
+  );
+
+  const refresh = useCallback(() => {
+    setVersion((value) => value + 1);
+  }, []);
 
   const status = describeHealth(health);
+  const offset = params.offset ?? 0;
+  const limit = params.limit ?? DEFAULT_PAGE_SIZE;
+  const total = result?.total ?? 0;
+  const shownFrom = total === 0 ? 0 : offset + 1;
+  const shownTo = offset + (result?.jobs.length ?? 0);
+  const canPrevious = offset > 0;
+  const canNext = shownTo < total;
+
+  const activeCount = [
+    params.q,
+    params.location,
+    params.company,
+    params.workMode,
+    params.employmentType,
+    params.seniority,
+    params.minSalary,
+    params.includeInactive,
+  ].filter(Boolean).length;
+
+  function goToOffset(nextOffset: number) {
+    setParams((previous) => ({ ...previous, offset: nextOffset }));
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
 
   return (
     <main className="page">
-      <header className="masthead">
-        <div>
-          <h1>Web10</h1>
-          <p className="tagline">
-            Classify a page into the catalogue with the local OpenCode model.
-          </p>
+      <header className="topbar">
+        <a
+          className="brand"
+          href="/"
+          onClick={(event) => {
+            if (!isPlainClick(event)) {
+              return;
+            }
+
+            event.preventDefault();
+            goHome();
+          }}
+        >
+          <span className="brand__mark" aria-hidden="true">
+            10
+          </span>
+          <div>
+            <h1>Web10 Jobs</h1>
+            <p className="brand__tagline">
+              One private index of jobs captured from across the web.
+            </p>
+          </div>
+        </a>
+
+        <div className="topbar__actions">
+          <span className={`status status--${status.tone}`}>{status.text}</span>
+          <CaptureForm onCaptured={handleCaptured} />
         </div>
-        <span className={`status status--${status.tone}`}>{status.text}</span>
       </header>
 
-      <section className="card">
-        <form onSubmit={onSubmit} className="form">
-          <label className="field">
-            <span>URL</span>
-            <input
-              type="url"
-              value={url}
-              onChange={(event) => setUrl(event.target.value)}
-              placeholder="https://example.com/listing/123"
-              required
-            />
-          </label>
+      {route.kind === 'asset' ? (
+        <section className="asset-view" aria-live="polite">
+          {jobLoading && !job ? (
+            <div className="card skeleton skeleton--detail" aria-hidden="true" />
+          ) : null}
 
-          <label className="field">
-            <span>Title</span>
-            <input
-              type="text"
-              value={title}
-              onChange={(event) => setTitle(event.target.value)}
-              placeholder="Optional page title"
-            />
-          </label>
+          {!jobLoading && jobError ? (
+            <div className="empty card">
+              <h3>Job not found</h3>
+              <p className="muted">{jobError}</p>
+              <button type="button" className="button" onClick={goHome}>
+                Back to all jobs
+              </button>
+            </div>
+          ) : null}
 
-          <label className="field field--grow">
-            <span>Page text</span>
-            <textarea
-              value={content}
-              onChange={(event) => setContent(event.target.value)}
-              placeholder="Paste the visible text of the page…"
-              rows={10}
-              required
+          {job ? (
+            <JobDetail
+              job={job}
+              variant="page"
+              onClose={goHome}
+              onDelete={handleDelete}
             />
-          </label>
+          ) : null}
+        </section>
+      ) : (
+        <>
+          <section className="searchbar card" aria-label="Search and sort">
+            <label className="searchbar__input">
+              <span className="sr-only">Search jobs</span>
+              <span className="searchbar__icon" aria-hidden="true">
+                ⌕
+              </span>
+              <input
+                type="search"
+                value={q}
+                onChange={(event) => setQ(event.target.value)}
+                placeholder="Search roles, companies, skills…"
+              />
+            </label>
 
-          <div className="actions">
-            <button type="submit" disabled={busy}>
-              {busy ? 'Classifying…' : 'Classify page'}
-            </button>
+            <label className="searchbar__sort">
+              <span>Sort</span>
+              <select
+                value={params.sort ?? 'newest'}
+                onChange={(event) =>
+                  setParams((previous) => ({
+                    ...previous,
+                    sort: event.target.value as JobSort,
+                    offset: 0,
+                  }))
+                }
+              >
+                {JOB_SORTS.map((sort) => (
+                  <option key={sort} value={sort}>
+                    {SORT_LABELS[sort]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
             <button
               type="button"
-              className="ghost"
-              onClick={loadSample}
-              disabled={busy}
+              className="button button--ghost"
+              onClick={refresh}
+              disabled={loading}
             >
-              Load sample
+              Refresh
             </button>
-          </div>
-        </form>
-      </section>
+          </section>
 
-      {error ? <p className="banner banner--error">{error}</p> : null}
+          <div className="layout">
+            <Filters
+              facets={
+                result?.facets ?? {
+                  work_modes: [],
+                  employment_types: [],
+                  seniorities: [],
+                  locations: [],
+                  companies: [],
+                }
+              }
+              params={params}
+              location={locationInput}
+              onLocationChange={setLocationInput}
+              onChange={applyPatch}
+              onClear={clearFilters}
+              activeCount={activeCount}
+            />
 
-      {result ? (
-        <section className="card">
-          <div className="result-head">
-            <h2>
-              {result.entity.category}
-              <span className="slash">/</span>
-              {result.entity.subcategory}
-            </h2>
-            <span className="chip">{result.entity.state}</span>
-          </div>
-
-          <dl className="entity">
-            {ENTITY_FIELDS.map(({ key, label }) => (
-              <div key={key} className="entity__row">
-                <dt>{label}</dt>
-                <dd>{display(result.entity[key])}</dd>
+            <section className="results" aria-live="polite">
+              <div className="results__head">
+                <div>
+                  <h2>{result ? pluralJobs(result.total) : 'Loading jobs…'}</h2>
+                  {result && result.total > 0 ? (
+                    <p className="muted">
+                      Showing {shownFrom}–{shownTo}
+                      {result.took_ms > 0 ? ` · ${result.took_ms} ms` : ''}
+                    </p>
+                  ) : null}
+                </div>
+                {loading ? (
+                  <span
+                    className="spinner"
+                    role="status"
+                    aria-label="Searching"
+                  />
+                ) : null}
               </div>
-            ))}
-          </dl>
 
-          <details className="raw">
-            <summary>Raw JSON</summary>
-            <pre>{JSON.stringify(result, null, 2)}</pre>
-          </details>
-        </section>
-      ) : null}
+              {error ? (
+                <div className="banner banner--error">
+                  <span>{error}</span>
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={refresh}
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : null}
+
+              {loading && !result ? (
+                <div className="results__list">
+                  {[0, 1, 2].map((index) => (
+                    <div
+                      key={index}
+                      className="skeleton card"
+                      aria-hidden="true"
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {result && result.jobs.length > 0 ? (
+                <div
+                  className={`results__list${loading ? ' results__list--busy' : ''}`}
+                >
+                  {result.jobs.map((item) => (
+                    <JobCard key={item.id} job={item} onSelect={openJob} />
+                  ))}
+                </div>
+              ) : null}
+
+              {!loading && result && result.jobs.length === 0 ? (
+                <div className="empty card">
+                  <h3>
+                    {activeCount > 0
+                      ? 'No jobs match these filters'
+                      : 'Your job index is empty'}
+                  </h3>
+                  {activeCount > 0 ? (
+                    <>
+                      <p className="muted">
+                        Try removing a filter or widening the salary range.
+                      </p>
+                      <button
+                        type="button"
+                        className="button"
+                        onClick={clearFilters}
+                      >
+                        Clear filters
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="muted">
+                        Open an individual job ad, then save it with the Web10
+                        Chrome extension. Captured jobs appear here, ready to
+                        search.
+                      </p>
+                      <ol className="empty__steps">
+                        <li>Start the API with <code>npm run dev</code>.</li>
+                        <li>
+                          Load the <code>chrome-extension</code> folder
+                          unpacked.
+                        </li>
+                        <li>
+                          Click the extension on a job ad and choose Save job.
+                        </li>
+                      </ol>
+                    </>
+                  )}
+                </div>
+              ) : null}
+
+              {canPrevious || canNext ? (
+                <nav className="pagination" aria-label="Pagination">
+                  <button
+                    type="button"
+                    className="button button--ghost"
+                    onClick={() => goToOffset(Math.max(0, offset - limit))}
+                    disabled={!canPrevious || loading}
+                  >
+                    ← Previous
+                  </button>
+                  <span className="muted">
+                    Page {Math.floor(offset / limit) + 1}
+                  </span>
+                  <button
+                    type="button"
+                    className="button button--ghost"
+                    onClick={() => goToOffset(offset + limit)}
+                    disabled={!canNext || loading}
+                  >
+                    Next →
+                  </button>
+                </nav>
+              ) : null}
+            </section>
+          </div>
+        </>
+      )}
     </main>
   );
 }

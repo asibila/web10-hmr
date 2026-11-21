@@ -2,7 +2,7 @@
   "name": "web10",
   "version": "0.1.0",
   "private": true,
-  "description": "Web10 monorepo: classification API, React dashboard and the shared catalogue contract.",
+  "description": "Web10 jobs monorepo: extraction API, PostgreSQL job index, React search UI and the shared jobs contract.",
   "workspaces": [
     "apps/*",
     "packages/*"

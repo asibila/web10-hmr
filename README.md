@@ -1,8 +1,9 @@
-# Web10
+# Web10 Jobs
 
-Unified, deduplicated catalog of the internet's supply and demand — a faceted
-search surface over classifieds, jobs, stock media, rentals, services, events
-and more.
+A private, deduplicated index of job postings captured from the open web — one
+faceted search surface over roles, companies, locations, work modes, seniority
+and salary. Web10 was originally a general asset catalogue; the product now
+focuses on jobs.
 
 This repository is an npm workspace with two runnable apps and one shared
 package.
@@ -12,12 +13,13 @@ package.
 ```
 .
 ├── apps/
-│   ├── api/                 # NestJS classification API (Node)  — @web10/api
-│   └── web/                 # React + Vite dashboard             — @web10/web
+│   ├── api/                 # NestJS jobs API + PostgreSQL     — @web10/api
+│   └── web/                 # React + Vite search UI           — @web10/web
 ├── packages/
-│   └── shared/              # Catalogue contract                 — @web10/shared
-├── chrome-extension/        # Unpacked extension that captures pages
+│   └── shared/              # Jobs contract                    — @web10/shared
 └── package.json             # Workspaces root
+
+../chrome-extension/         # Sibling folder: unpacked job-capture extension
 ```
 
 `apps/api` is its own git repository with its original history. `web10-api/` no
@@ -96,11 +98,30 @@ replaces it with the rendered markup and appends
 `window.__WEB10_DATA__ = {...}` before `</body>`, so the first paint already has
 the data and hydration starts from an identical state.
 
-Data loading is a self-request to the API (`/api/health` today), which keeps the
-boundary honest: the server calls the same endpoint the browser would. Extend
-`AppData` in `app-data.ts` and `ssr.ts` together when a page needs more, and
-give `render` a `url` parameter for route-dependent pages — the middleware
-already passes the request path.
+Data loading is a self-request to the API (`/api/health`, the first page of
+`/api/jobs`, or one `/api/jobs/:id`), which keeps the boundary honest: the
+server calls the same endpoints the browser would. `parseAppRoute` in
+`@web10/shared` maps each request pathname to a route, and `AppData` carries
+that route plus its data, so `entry-server.tsx` renders the same tree the
+browser hydrates. Extend `AppData` (and `EMPTY_APP_DATA`) in the shared package
+when a page needs more.
+
+Asset pages also get their own `<title>` and meta description, written from the
+resolved posting in `ssr.ts`, so a copied link previews the job rather than the
+home page.
+
+#### Routes
+
+| Path | Renders |
+|---|---|
+| `/` | the faceted search index |
+| `/asset/:id` | one posting, server-resolved; an unknown or removed id answers `404` |
+
+Asset links are canonical: `jobAssetPath(id)` builds `/asset/:id`, job cards are
+real anchors (so middle-click and copy-link work), and the client uses the
+History API (`pushState` / `popstate`) to move between the index and a posting
+without a full reload. The same route parser decides the server's first paint,
+so a pasted link works before any JavaScript runs.
 
 #### Serving modes
 
@@ -181,17 +202,20 @@ pages that ship no JavaScript. The `render` signature is the seam for all three.
 
 ### The shared contract
 
-`packages/shared/src/index.ts` holds the taxonomy (`CATEGORIES`, `OFFER_TYPES`,
-`STATES`) and the request/response types (`ClassifyPageInput`,
-`EntityClassification`, `ClassificationResult`, `HealthStatus`).
+`packages/shared/src/index.ts` holds the job vocabulary (`WORK_MODES`,
+`EMPLOYMENT_TYPES`, `SENIORITY_LEVELS`, `SALARY_PERIODS`, `JOB_STATUSES`),
+the request/response types (`JobPosting`, `CaptureJobInput`, `CaptureJobResult`,
+`JobSearchParams`, `JobSearchResult`, `HealthStatus`), and the routing helpers
+(`AppRoute`, `AppData`, `parseAppRoute`, `jobAssetPath`).
 
 - The API imports the compiled package (`@web10/shared` → `dist`).
 - The web app resolves the **TypeScript source** directly, so edits are picked
   up without rebuilding.
 
-Change the contract there, not in either app. `ClassifyPageDto` declares
-`implements ClassifyPageInput`, so the class-validator DTO cannot drift from the
-shared type without a compile error.
+Change the contract there, not in either app. `CaptureJobDto` declares
+`implements CaptureJobInput` and `SearchJobsDto` implements `JobSearchParams`,
+so the class-validator DTOs cannot drift from the shared types without a compile
+error.
 
 ## Commands
 
@@ -204,6 +228,11 @@ npm run build        # shared -> API -> client bundle -> SSR bundle, in that ord
 npm start            # same server, serving the prebuilt React app
 npm run typecheck    # typecheck every workspace
 ```
+
+The database referenced by `DATABASE_URL` must exist before `npm run dev`; the
+schema itself is created at boot. See
+[`apps/api/README.md`](apps/api/README.md#setup) for the one-time role and
+database creation.
 
 `npm run dev` is a single process. The API and the dashboard are both served
 from `http://127.0.0.1:3000`; there is no second dev port.
@@ -228,7 +257,8 @@ the build, and its `emptyOutDir` deletes the SSR bundle next to it.
 ## Configuration
 
 The API reads `.env` from `apps/api/.env`. Copy `apps/api/.env.example` and set
-at least `OPENCODE_PASSWORD`. See `apps/api/README.md` for the full table.
+at least `DATABASE_URL` and `OPENCODE_PASSWORD`. See `apps/api/README.md` for the
+database setup and the full table.
 
 The web app needs no configuration: it always calls `/api` on its own origin.
 
@@ -236,6 +266,8 @@ Optional API settings that affect the modes above:
 
 | Variable | Effect |
 |---|---|
+| `DATABASE_URL` | PostgreSQL connection string. The `job_postings` table and its indexes are created at boot |
+| `DATABASE_SSL` | Set to `1`/`true` for managed Postgres that requires TLS |
 | `HOST` | Interface to bind (default `127.0.0.1`). Set `0.0.0.0` on any platform that proxies traffic to the container |
 | `PORT` | Port for API, assets and HMR together (default `3000`); platforms inject this |
 | `WEB_DIST_DIR` | Overrides `apps/web/dist` for **both** SSR and client-only serving. Keep it inside the repository: the SSR bundle resolves `react` from the nearest `node_modules` |
@@ -246,6 +278,9 @@ Any host that runs Node works the same way: build once, then run the compiled
 entry point. Nothing is built at startup.
 
 **Render — Node web service**
+
+Provision a PostgreSQL instance first (Render Postgres or any managed provider),
+then copy its connection string into `DATABASE_URL`.
 
 | Setting | Value |
 |---|---|
@@ -261,7 +296,8 @@ Required environment variables:
 | Variable | Why |
 |---|---|
 | `HOST=0.0.0.0` | Without it the server binds loopback and Render reports no open ports |
-| `OPENCODE_BASE_URL` | Reachable OpenCode server. The default `http://127.0.0.1:4096` only exists on your machine, so classification returns 502 and `/api/health` reports `opencode.ok: false` |
+| `DATABASE_URL` | The job index. Use the internal connection string and set `DATABASE_SSL=1` when the provider requires TLS |
+| `OPENCODE_BASE_URL` | Reachable OpenCode server. The default `http://127.0.0.1:4096` only exists on your machine, so extraction returns 502 and `/api/health` reports `opencode.ok: false` |
 | `OPENCODE_PASSWORD` | Credential for that server |
 
 Do **not** set `PORT`: the platform assigns it and `main.ts` reads it.
